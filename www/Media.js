@@ -87,6 +87,14 @@ Media.prototype.stop = function() {
 };
 
 /**
+ * Destroy
+ */
+Media.prototype.destroy = function() {
+
+    exec(null, null, "Media", "onReset", [this.id]);
+};
+
+/**
  * Seek or jump to a new time in the track..
  */
 Media.prototype.seekTo = function(milliseconds) {
