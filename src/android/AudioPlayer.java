@@ -38,6 +38,8 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.IOException;
 import java.util.LinkedList;
+import android.media.PlaybackParams;
+import android.os.Build;
 
 /**
  * This class implements the audio playback and recording capabilities used by Cordova.
@@ -542,6 +544,33 @@ public class AudioPlayer implements OnCompletionListener, OnPreparedListener, On
     }
 
     /**
+      * Set the rate for audio player
+      *
+      * @param rate
+      */
+ 
+     public void setRate(float rate) {
+         if (this.player != null) {
+               
+             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                 
+                 PlaybackParams params = new PlaybackParams();
+                params.setSpeed(rate);
+                 player.setPlaybackParams(params);
+             }
+             else {
+              LOG.d(LOG_TAG, "AudioPlayer Error: Android build version is not supported");
+              sendErrorStatus(MEDIA_ERR_NONE_SUPPORTED);
+             }
+         } else {
+             LOG.d(LOG_TAG, "AudioPlayer Error: Cannot set volume until the audio file is initialized.");
+             sendErrorStatus(MEDIA_ERR_NONE_ACTIVE);
+         }
+     }
+ 
+
+
+   /**
      * attempts to put the player in play mode
      * @return true if in playmode, false otherwise
      */
