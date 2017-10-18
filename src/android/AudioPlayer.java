@@ -558,10 +558,6 @@ public class AudioPlayer implements OnCompletionListener, OnPreparedListener, On
                 params.setSpeed(rate);
                  player.setPlaybackParams(params);
              }
-             else {
-              LOG.d(LOG_TAG, "AudioPlayer Error: Android build version is not supported");
-              sendErrorStatus(MEDIA_ERR_NONE_SUPPORTED);
-             }
          } else {
              LOG.d(LOG_TAG, "AudioPlayer Error: Cannot set volume until the audio file is initialized.");
              sendErrorStatus(MEDIA_ERR_NONE_ACTIVE);
