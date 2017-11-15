@@ -580,10 +580,11 @@
             [avPlayer seekToTime: timeToSeek
                  toleranceBefore: kCMTimeZero
                   toleranceAfter: kCMTimeZero
-                         setRate: customRate //setting previous rate
                completionHandler: ^(BOOL finished) {
                    if (isPlaying) [avPlayer play];
                }];
+            
+            [avPlayer setRate:customRate];
 
         } else {
             NSString* errMsg = @"AVPlayerItem cannot service a seek request with a completion handler until its status is AVPlayerItemStatusReadyToPlay.";
