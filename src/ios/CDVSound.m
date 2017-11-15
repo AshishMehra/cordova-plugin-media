@@ -560,8 +560,14 @@
             audioFile.player.currentTime = 0;
             [self onStatus:MEDIA_STATE mediaId:mediaId param:@(MEDIA_STOPPED)];
         } else {
+            NSNumber* rate = audioFile.rate;
+
             audioFile.player.currentTime = posInSeconds;
             [self onStatus:MEDIA_POSITION mediaId:mediaId param:@(posInSeconds)];
+
+            audioFile.rate = rate;
+            audioFile.player.enableRate = YES;
+            audioFile.player.rate = [rate floatValue];
         }
 
     } else if (avPlayer != nil) {
@@ -576,7 +582,7 @@
         // To avoid the app crashing in such a situation, we only seek if both the player and the player item are ready to play. If not ready, we send an error back to JS land.
 
         //we also need to maintain the rate 
-        float customRate = avPlayer.rate;
+        float    customRate = avPlayer.rate;
 
         if(isReadyToSeek) {
             [avPlayer seekToTime: timeToSeek
@@ -585,7 +591,7 @@
                completionHandler: ^(BOOL finished) {
                    if (isPlaying) [avPlayer play];
                }];
-            
+
             [avPlayer setRate:customRate];
 
         } else {
