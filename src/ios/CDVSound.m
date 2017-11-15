@@ -571,6 +571,8 @@
             audioFile.rate = rate;
             audioFile.player.enableRate = YES;
             audioFile.player.rate = [rate floatValue];
+
+            [[self soundCache] setObject:audioFile forKey:mediaId];
         }
 
     } else if (avPlayer != nil) { //part-b
@@ -589,7 +591,7 @@
 
         NSLog(@"Inside part-b custom rate '%f'", customRate);
 
-        if(isReadyToSeek) {
+        if(isReadyToSeek) { //part-c
             [avPlayer seekToTime: timeToSeek
                  toleranceBefore: kCMTimeZero
                   toleranceAfter: kCMTimeZero
@@ -597,7 +599,12 @@
                    if (isPlaying) [avPlayer play];
                }];
 
-            [avPlayer setRate:customRate]; //part-c
+            [avPlayer setRate:customRate]; 
+
+            if((audioFile != nil)) { //part-d
+                [[self soundCache] setObject:audioFile forKey:mediaId];
+                NSLog(@"Inside part-d audioFile was not nil so setting object");
+            }
 
             NSLog(@"Inside part-c custom rate '%f'", customRate);
 
