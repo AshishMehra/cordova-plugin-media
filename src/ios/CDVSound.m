@@ -572,13 +572,19 @@
         // CB-10535:
         // When dealing with remote files, we can get into a situation where we start playing before AVPlayer has had the time to buffer the file to be played.
         // To avoid the app crashing in such a situation, we only seek if both the player and the player item are ready to play. If not ready, we send an error back to JS land.
+
+        //we also need to maintain the rate 
+        float customRate = avPlayer.rate;
+
         if(isReadyToSeek) {
             [avPlayer seekToTime: timeToSeek
                  toleranceBefore: kCMTimeZero
                   toleranceAfter: kCMTimeZero
+                         setRate: customRate //setting previous rate
                completionHandler: ^(BOOL finished) {
                    if (isPlaying) [avPlayer play];
                }];
+
         } else {
             NSString* errMsg = @"AVPlayerItem cannot service a seek request with a completion handler until its status is AVPlayerItemStatusReadyToPlay.";
             [self onStatus:MEDIA_ERROR mediaId:mediaId param:
