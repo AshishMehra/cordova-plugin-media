@@ -48,7 +48,6 @@ var Media = function(src, successCallback, errorCallback, statusCallback) {
     this._duration = -1;
     this._position = -1;
     exec(null, this.errorCallback, "Media", "create", [this.id, this.src]);
-    exec(null, null, "Media", "prepareToPlay", [this.id]);
 };
 
 // Media messages
