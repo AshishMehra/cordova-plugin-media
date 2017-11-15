@@ -261,6 +261,24 @@
         [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
 
         BOOL bError = [self prepareToPlay:audioFile withId:mediaId];
+
+        if (bError) {
+            /*  I don't see a problem playing previously recorded audio so removing this section - BG
+            NSError* error;
+            // try loading it one more time, in case the file was recorded previously
+            audioFile.player = [[ AVAudioPlayer alloc ] initWithContentsOfURL:audioFile.resourceURL error:&error];
+            if (error != nil) {
+                NSLog(@"Failed to initialize AVAudioPlayer: %@\n", error);
+                audioFile.player = nil;
+            } else {
+                NSLog(@"Playing audio sample '%@'", audioFile.resourcePath);
+                audioFile.player.numberOfLoops = numberOfLoops;
+                [audioFile.player play];
+            } */
+            // error creating the session or player
+            [self onStatus:MEDIA_ERROR mediaId:mediaId 
+              param:[self createMediaErrorWithCode:MEDIA_ERR_NONE_SUPPORTED message:nil]];
+        }
     }
 }
 
@@ -338,10 +356,10 @@
 
     CDVAudioFile* audioFile = [self audioFileForResource:resourcePath withId:mediaId doValidation:YES forRecording:NO];
     if ((audioFile != nil) && (audioFile.resourceURL != nil)) {
-        if (audioFile.player == nil) {
-            bError = [self prepareToPlay:audioFile withId:mediaId];
-        }
-        if (!bError) {
+        //if (audioFile.player == nil) {
+         //   bError = [self prepareToPlay:audioFile withId:mediaId];
+      //  }
+       // if (!bError) {
             //self.currMediaId = audioFile.player.mediaId;
             self.currMediaId = mediaId;
 
@@ -376,7 +394,7 @@
 
                     if (audioFile.rate != nil){
                         float customRate = [audioFile.rate floatValue];
-                        NSLog(@"Playing stream with AVPlayer & custom rate");
+                        NSLog(@"Playing stream with AVPlayer & custom rate '%f'", customRate);
                         [avPlayer setRate:customRate];
                     } else {
                         NSLog(@"Playing stream with AVPlayer & default rate");
@@ -411,24 +429,7 @@
                 [self onStatus:MEDIA_DURATION mediaId:mediaId param:@(duration)];
                 [self onStatus:MEDIA_STATE mediaId:mediaId param:@(MEDIA_RUNNING)];
             }
-        }
-        if (bError) {
-            /*  I don't see a problem playing previously recorded audio so removing this section - BG
-            NSError* error;
-            // try loading it one more time, in case the file was recorded previously
-            audioFile.player = [[ AVAudioPlayer alloc ] initWithContentsOfURL:audioFile.resourceURL error:&error];
-            if (error != nil) {
-                NSLog(@"Failed to initialize AVAudioPlayer: %@\n", error);
-                audioFile.player = nil;
-            } else {
-                NSLog(@"Playing audio sample '%@'", audioFile.resourcePath);
-                audioFile.player.numberOfLoops = numberOfLoops;
-                [audioFile.player play];
-            } */
-            // error creating the session or player
-            [self onStatus:MEDIA_ERROR mediaId:mediaId 
-              param:[self createMediaErrorWithCode:MEDIA_ERR_NONE_SUPPORTED message:nil]];
-        }
+        //}
     }
     // else audioFile was nil - error already returned from audioFile for resource
     return;
@@ -559,8 +560,10 @@
             [audioFile.player stop];
             audioFile.player.currentTime = 0;
             [self onStatus:MEDIA_STATE mediaId:mediaId param:@(MEDIA_STOPPED)];
-        } else {
+        } else { //part-a
             NSNumber* rate = audioFile.rate;
+
+            NSLog(@"Inside part-a custom rate '%f'", audioFile.rate);
 
             audioFile.player.currentTime = posInSeconds;
             [self onStatus:MEDIA_POSITION mediaId:mediaId param:@(posInSeconds)];
@@ -570,7 +573,7 @@
             audioFile.player.rate = [rate floatValue];
         }
 
-    } else if (avPlayer != nil) {
+    } else if (avPlayer != nil) { //part-b
         int32_t timeScale = avPlayer.currentItem.asset.duration.timescale;
         CMTime timeToSeek = CMTimeMakeWithSeconds(posInSeconds, timeScale);
 
@@ -582,7 +585,9 @@
         // To avoid the app crashing in such a situation, we only seek if both the player and the player item are ready to play. If not ready, we send an error back to JS land.
 
         //we also need to maintain the rate 
-        float    customRate = avPlayer.rate;
+        float customRate = avPlayer.rate;
+
+        NSLog(@"Inside part-b custom rate '%f'", customRate);
 
         if(isReadyToSeek) {
             [avPlayer seekToTime: timeToSeek
@@ -592,7 +597,9 @@
                    if (isPlaying) [avPlayer play];
                }];
 
-            [avPlayer setRate:customRate];
+            [avPlayer setRate:customRate]; //part-c
+
+            NSLog(@"Inside part-c custom rate '%f'", customRate);
 
         } else {
             NSString* errMsg = @"AVPlayerItem cannot service a seek request with a completion handler until its status is AVPlayerItemStatusReadyToPlay.";
