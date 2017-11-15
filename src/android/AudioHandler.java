@@ -18,10 +18,20 @@
 */
 package org.apache.cordova.media;
 
+import org.apache.cordova.PermissionHelper;
+import java.security.Permission;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaPlugin;
 import org.apache.cordova.CordovaResourceApi;
-import org.apache.cordova.PermissionHelper;
+import org.apache.cordova.LOG;
+import org.apache.cordova.PluginResult;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
 
 import android.Manifest;
 import android.content.Context;
@@ -29,36 +39,26 @@ import android.content.pm.PackageManager;
 import android.media.AudioManager;
 import android.media.AudioManager.OnAudioFocusChangeListener;
 import android.net.Uri;
-import android.os.Build;
-
-import java.security.Permission;
-import java.util.ArrayList;
-
-import org.apache.cordova.LOG;
-import org.apache.cordova.PluginResult;
-import org.json.JSONArray;
-import org.json.JSONException;
-import org.json.JSONObject;
-
-import java.util.HashMap;
 
 /**
  * This class called by CordovaActivity to play and record audio.
  * The file can be local or over a network using http.
  *
  * Audio formats supported (tested):
- * 	.mp3, .wav
+ *  .mp3, .wav
  *
  * Local audio files must reside in one of two places:
- * 		android_asset: 		file name must start with /android_asset/sound.mp3
- * 		sdcard:				file name is just sound.mp3
+ *      android_asset:      file name must start with /android_asset/sound.mp3
+ *      sdcard:             file name is just sound.mp3
  */
 public class AudioHandler extends CordovaPlugin {
 
     public static String TAG = "AudioHandler";
     HashMap<String, AudioPlayer> players;  // Audio player object
-    ArrayList<AudioPlayer> pausedForPhone; // Audio players that were paused when phone call came in
-    ArrayList<AudioPlayer> pausedForFocus; // Audio players that were paused when focus was lost
+    ArrayList<AudioPlayer> paused; // Audio players that were paused. Reasons:
+    boolean audioFocusLost = false; // paused when audiofocus was lost
+    boolean calling = false; // paused when calling
+    boolean activityFocusLost = false; // paused when activity got paused
     private int origVolumeStream = -1;
     private CallbackContext messageChannel;
 
@@ -77,8 +77,7 @@ public class AudioHandler extends CordovaPlugin {
      */
     public AudioHandler() {
         this.players = new HashMap<String, AudioPlayer>();
-        this.pausedForPhone = new ArrayList<AudioPlayer>();
-        this.pausedForFocus = new ArrayList<AudioPlayer>();
+        this.paused = new ArrayList<AudioPlayer>();
     }
 
 
@@ -96,10 +95,10 @@ public class AudioHandler extends CordovaPlugin {
 
     /**
      * Executes the request and returns PluginResult.
-     * @param action 		The action to execute.
-     * @param args 			JSONArry of arguments for the plugin.
-     * @param callbackContext		The callback context used when calling back into JavaScript.
-     * @return 				A PluginResult object with a status and message.
+     * @param action        The action to execute.
+     * @param args          JSONArry of arguments for the plugin.
+     * @param callbackContext       The callback context used when calling back into JavaScript.
+     * @return              A PluginResult object with a status and message.
      */
     public boolean execute(String action, JSONArray args, CallbackContext callbackContext) throws JSONException {
         CordovaResourceApi resourceApi = webView.getResourceApi();
@@ -129,13 +128,20 @@ public class AudioHandler extends CordovaPlugin {
         else if (action.equals("startPlayingAudio")) {
             String target = args.getString(1);
             String fileUriStr;
+            boolean playAudioWhenScreenIsLocked=true;
             try {
                 Uri targetUri = resourceApi.remapUri(Uri.parse(target));
                 fileUriStr = targetUri.toString();
             } catch (IllegalArgumentException e) {
                 fileUriStr = target;
             }
-            this.startPlayingAudio(args.getString(0), FileHelper.stripFileProtocol(fileUriStr));
+            try {
+                JSONObject playArgs = new JSONObject(args.getString(2));
+                playAudioWhenScreenIsLocked = playArgs.getBoolean("playAudioWhenScreenIsLocked");
+            } catch (JSONException e) {
+                playAudioWhenScreenIsLocked = true;
+            }
+           this.startPlayingAudio(args.getString(0), FileHelper.stripFileProtocol(fileUriStr),playAudioWhenScreenIsLocked);
         }
         else if (action.equals("seekToAudio")) {
             this.seekToAudio(args.getString(0), args.getInt(1));
@@ -151,13 +157,6 @@ public class AudioHandler extends CordovaPlugin {
            } catch (NumberFormatException nfe) {
                //no-op
            }
-        }
-        else if (action.equals("setRate")) {
-            try {
-                this.setRate(args.getString(0), Float.parseFloat(args.getString(1)));
-            } catch (NumberFormatException nfe) {
-                //no-op
-            }
         } else if (action.equals("getCurrentPositionAudio")) {
             float f = this.getCurrentPositionAudio(args.getString(0));
             callbackContext.sendPluginResult(new PluginResult(status, f));
@@ -232,21 +231,21 @@ public class AudioHandler extends CordovaPlugin {
             if ("ringing".equals(data) || "offhook".equals(data)) {
 
                 // Get all audio players and pause them
-                for (AudioPlayer audio : this.players.values()) {
-                    if (audio.getState() == AudioPlayer.STATE.MEDIA_RUNNING.ordinal()) {
-                        this.pausedForPhone.add(audio);
-                        audio.pausePlaying();
-                    }
-                }
+                calling = true;
+                pauseAll();
 
             }
 
             // If phone idle, then resume playing those players we paused
             else if ("idle".equals(data)) {
-                for (AudioPlayer audio : this.pausedForPhone) {
-                    audio.startPlaying(null);
+                if(!audioFocusLost){
+                    if (activityFocusLost) {
+                        resumePlayingMarked();
+                    }else {
+                        resumePlayingAll();
+                    }
                 }
-                this.pausedForPhone.clear();
+                calling = false;
             }
         }
         return null;
@@ -257,20 +256,25 @@ public class AudioHandler extends CordovaPlugin {
     //--------------------------------------------------------------------------
 
     private AudioPlayer getOrCreatePlayer(String id, String file) {
+        return getOrCreatePlayer(id,file,true);
+    }
+
+    private AudioPlayer getOrCreatePlayer(String id, String file, boolean playAudioWhenScreenIsLocked) {
         AudioPlayer ret = players.get(id);
         if (ret == null) {
             if (players.isEmpty()) {
                 onFirstPlayerCreated();
             }
-            ret = new AudioPlayer(this, id, file);
+            ret = new AudioPlayer(this, id, file, playAudioWhenScreenIsLocked);
             players.put(id, ret);
         }
+        ret.setPlayAudioWhenScreenIsLocked(playAudioWhenScreenIsLocked);
         return ret;
     }
 
     /**
      * Release the audio player instance to save memory.
-     * @param id				The id of the audio player
+     * @param id                The id of the audio player
      */
     private boolean release(String id) {
         AudioPlayer audio = players.remove(id);
@@ -286,8 +290,8 @@ public class AudioHandler extends CordovaPlugin {
 
     /**
      * Start recording and save the specified file.
-     * @param id				The id of the audio player
-     * @param file				The name of the file
+     * @param id                The id of the audio player
+     * @param file              The name of the file
      */
     public void startRecordingAudio(String id, String file) {
         AudioPlayer audio = getOrCreatePlayer(id, file);
@@ -296,7 +300,7 @@ public class AudioHandler extends CordovaPlugin {
 
     /**
      * Stop/Pause recording and save to the file specified when recording started.
-     * @param id				The id of the audio player
+     * @param id                The id of the audio player
      * @param stop      If true stop recording, if false pause recording
      */
     public void stopRecordingAudio(String id, boolean stop) {
@@ -308,7 +312,7 @@ public class AudioHandler extends CordovaPlugin {
 
     /**
      * Resume recording
-     * @param id				The id of the audio player
+     * @param id                The id of the audio player
      */
     public void resumeRecordingAudio(String id) {
         AudioPlayer audio = players.get(id);
@@ -319,19 +323,19 @@ public class AudioHandler extends CordovaPlugin {
 
     /**
      * Start or resume playing audio file.
-     * @param id				The id of the audio player
-     * @param file				The name of the audio file.
+     * @param id                The id of the audio player
+     * @param file              The name of the audio file.
      */
-    public void startPlayingAudio(String id, String file) {
-        AudioPlayer audio = getOrCreatePlayer(id, file);
+    public void startPlayingAudio(String id, String file, boolean playAudioWhenScreenIsLocked) {
+        AudioPlayer audio = getOrCreatePlayer(id, file, playAudioWhenScreenIsLocked);
         audio.startPlaying(file);
         getAudioFocus();
     }
 
     /**
      * Seek to a location.
-     * @param id				The id of the audio player
-     * @param milliseconds		int: number of milliseconds to skip 1000 = 1 second
+     * @param id                The id of the audio player
+     * @param milliseconds      int: number of milliseconds to skip 1000 = 1 second
      */
     public void seekToAudio(String id, int milliseconds) {
         AudioPlayer audio = this.players.get(id);
@@ -342,7 +346,7 @@ public class AudioHandler extends CordovaPlugin {
 
     /**
      * Pause playing.
-     * @param id				The id of the audio player
+     * @param id                The id of the audio player
      */
     public void pausePlayingAudio(String id) {
         AudioPlayer audio = this.players.get(id);
@@ -353,7 +357,7 @@ public class AudioHandler extends CordovaPlugin {
 
     /**
      * Stop playing the audio file.
-     * @param id				The id of the audio player
+     * @param id                The id of the audio player
      */
     public void stopPlayingAudio(String id) {
         AudioPlayer audio = this.players.get(id);
@@ -364,8 +368,8 @@ public class AudioHandler extends CordovaPlugin {
 
     /**
      * Get current position of playback.
-     * @param id				The id of the audio player
-     * @return 					position in msec
+     * @param id                The id of the audio player
+     * @return                  position in msec
      */
     public float getCurrentPositionAudio(String id) {
         AudioPlayer audio = this.players.get(id);
@@ -377,9 +381,9 @@ public class AudioHandler extends CordovaPlugin {
 
     /**
      * Get the duration of the audio file.
-     * @param id				The id of the audio player
-     * @param file				The name of the audio file.
-     * @return					The duration in msec.
+     * @param id                The id of the audio player
+     * @param file              The name of the audio file.
+     * @return                  The duration in msec.
      */
     public float getDurationAudio(String id, String file) {
         AudioPlayer audio = getOrCreatePlayer(id, file);
@@ -389,7 +393,7 @@ public class AudioHandler extends CordovaPlugin {
     /**
      * Set the audio device to be used for playback.
      *
-     * @param output			1=earpiece, 2=speaker
+     * @param output            1=earpiece, 2=speaker
      */
     @SuppressWarnings("deprecation")
     public void setAudioOutputDevice(int output) {
@@ -407,21 +411,55 @@ public class AudioHandler extends CordovaPlugin {
         }
     }
 
-    public void pauseAllLostFocus() {
+    /**
+     * This method pauses all AudioPlayers.
+     * */
+    public void pauseAll() {
         for (AudioPlayer audio : this.players.values()) {
             if (audio.getState() == AudioPlayer.STATE.MEDIA_RUNNING.ordinal()) {
-                this.pausedForFocus.add(audio);
+                this.paused.add(audio);
                 audio.pausePlaying();
             }
         }
     }
 
-    public void resumeAllGainedFocus() {
-        for (AudioPlayer audio : this.pausedForFocus) {
+    /**
+     * This method pauses all AudioPlayers not marked with isPlayAudioWhenScreenIsLocked.
+     * */
+    public void pauseAudiosNotMarked() {
+        for (AudioPlayer audio : this.players.values()) {
+            if (audio.getState() == AudioPlayer.STATE.MEDIA_RUNNING.ordinal() && !audio.isPlayAudioWhenScreenIsLocked()) {
+                this.paused.add(audio);
+                audio.pausePlaying();
+            }
+        }
+    }
+
+    /**
+     * Resume playing all paused audios
+     */
+    public void resumePlayingAll() {
+        for (AudioPlayer audio : this.paused) {
             audio.resumePlaying();
         }
-        this.pausedForFocus.clear();
+        paused.clear();
     }
+
+    /**
+     * Resume playing all audios marked with isPlayAudioWhenScreenIsLocked
+     */
+    public void resumePlayingMarked() {
+        ArrayList<AudioPlayer> remove = new ArrayList<AudioPlayer>();
+        for (AudioPlayer audio : this.paused) {
+            if(audio.isPlayAudioWhenScreenIsLocked()){
+                audio.resumePlaying();
+                remove.add(audio);
+            }
+        }
+        paused.removeAll(remove);
+    }
+
+
 
     /**
      * Get the the audio focus
@@ -432,10 +470,18 @@ public class AudioHandler extends CordovaPlugin {
                 case (AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK) :
                 case (AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) :
                 case (AudioManager.AUDIOFOCUS_LOSS) :
-                    pauseAllLostFocus();
+                    pauseAll();
+                    audioFocusLost =  true;
                     break;
                 case (AudioManager.AUDIOFOCUS_GAIN):
-                    resumeAllGainedFocus();
+                    if (!calling) {
+                        if(activityFocusLost){
+                            resumePlayingMarked();
+                        }else{
+                            resumePlayingAll();
+                        }
+                    }
+                    audioFocusLost =  false;
                     break;
                 default:
                     break;
@@ -461,7 +507,7 @@ public class AudioHandler extends CordovaPlugin {
     /**
      * Get the audio device to be used for playback.
      *
-     * @return					1=earpiece, 2=speaker
+     * @return                  1=earpiece, 2=speaker
      */
     @SuppressWarnings("deprecation")
     public int getAudioOutputDevice() {
@@ -480,7 +526,7 @@ public class AudioHandler extends CordovaPlugin {
     /**
      * Set the volume for an audio device
      *
-     * @param id				The id of the audio player
+     * @param id                The id of the audio player
      * @param volume            Volume to adjust to 0.0f - 1.0f
      */
     public void setVolume(String id, float volume) {
@@ -493,23 +539,6 @@ public class AudioHandler extends CordovaPlugin {
           LOG.e(TAG3,"Unknown Audio Player " + id);
         }
     }
-
-    /**
-    * Set the rate for an audio device
-    *
-    * @param id     The id of the audio player
-    * @param rate   Rate to adjust to -0.5 - 3.0
-    */
-   public void setRate(String id, float rate) {
-     String TAG3 = "AudioHandler.setRate(): Error : ";
- 
-     AudioPlayer audio = this.players.get(id);
-     if (audio != null) {
-       audio.setRate(rate);
-     } else {
-       LOG.e(TAG3, "Unknown Audio Player " + id);
-     }
-   }
 
     private void onFirstPlayerCreated() {
         origVolumeStream = cordova.getActivity().getVolumeControlStream();
@@ -577,10 +606,26 @@ public class AudioHandler extends CordovaPlugin {
 
     }
 
+    @Override
+    public void onResume(boolean multitasking) {
+        super.onResume(multitasking);
+        if (!(audioFocusLost||calling)) {
+            resumePlayingAll();
+        }
+        activityFocusLost = false;
+    }
+
+    @Override
+    public void onPause(boolean multitasking) {
+        activityFocusLost = true;
+        pauseAudiosNotMarked();
+        super.onPause(multitasking);
+    }
+
     /**
      * Get current amplitude of recording.
-     * @param id				The id of the audio player
-     * @return 					amplitude
+     * @param id                The id of the audio player
+     * @return                  amplitude
      */
     public float getCurrentAmplitudeAudio(String id) {
         AudioPlayer audio = this.players.get(id);
