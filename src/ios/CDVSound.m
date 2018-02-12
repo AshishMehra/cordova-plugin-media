@@ -445,7 +445,7 @@ BOOL keepAvAudioSessionAlwaysActive = NO;
                 [self onStatus:MEDIA_DURATION mediaId:mediaId param:@(duration)];
                 [self onStatus:MEDIA_STATE mediaId:mediaId param:@(MEDIA_RUNNING)];
             }
-        }
+        //}
         if (bError) {
             /*  I don't see a problem playing previously recorded audio so removing this section - BG
             NSError* error;
