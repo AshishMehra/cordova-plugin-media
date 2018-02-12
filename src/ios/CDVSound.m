@@ -27,7 +27,23 @@
 
 @implementation CDVSound
 
+BOOL keepAvAudioSessionAlwaysActive = NO;
+
 @synthesize soundCache, avSession, currMediaId, statusCallbackId;
+
+-(void) pluginInitialize
+{
+    NSDictionary* settings = self.commandDelegate.settings;
+    keepAvAudioSessionAlwaysActive = [[settings objectForKey:[@"KeepAVAudioSessionAlwaysActive" lowercaseString]] boolValue];
+    if (keepAvAudioSessionAlwaysActive) {
+        if ([self hasAudioSession]) {
+            NSError* error = nil;
+            if(![self.avSession setActive:YES error:&error]) {
+                NSLog(@"Unable to activate session: %@", [error localizedFailureReason]);
+            }
+        }
+    }
+}
 
 // Maps a url for a resource path for recording
 - (NSURL*)urlForRecording:(NSString*)resourcePath
@@ -429,7 +445,24 @@
                 [self onStatus:MEDIA_DURATION mediaId:mediaId param:@(duration)];
                 [self onStatus:MEDIA_STATE mediaId:mediaId param:@(MEDIA_RUNNING)];
             }
-        //}
+        }
+        if (bError) {
+            /*  I don't see a problem playing previously recorded audio so removing this section - BG
+            NSError* error;
+            // try loading it one more time, in case the file was recorded previously
+            audioFile.player = [[ AVAudioPlayer alloc ] initWithContentsOfURL:audioFile.resourceURL error:&error];
+            if (error != nil) {
+                NSLog(@"Failed to initialize AVAudioPlayer: %@\n", error);
+                audioFile.player = nil;
+            } else {
+                NSLog(@"Playing audio sample '%@'", audioFile.resourcePath);
+                audioFile.player.numberOfLoops = numberOfLoops;
+                [audioFile.player play];
+            } */
+            // error creating the session or player
+            [self onStatus:MEDIA_ERROR mediaId:mediaId
+              param:[self createMediaErrorWithCode:MEDIA_ERR_NONE_SUPPORTED message:nil]];
+        }
     }
     // else audioFile was nil - error already returned from audioFile for resource
     return;
@@ -475,7 +508,7 @@
     if (playerError != nil) {
         NSLog(@"Failed to initialize AVAudioPlayer: %@\n", [playerError localizedDescription]);
         audioFile.player = nil;
-        if (self.avSession) {
+        if (! keepAvAudioSessionAlwaysActive && self.avSession && ! [self isPlayingOrRecording]) {
             [self.avSession setActive:NO error:nil];
         }
         bError = YES;
@@ -636,7 +669,7 @@
                 [avPlayer pause];
                 avPlayer = nil;
             }
-            if (self.avSession) {
+            if (! keepAvAudioSessionAlwaysActive && self.avSession && ! [self isPlayingOrRecording]) {
                 [self.avSession setActive:NO error:nil];
                 self.avSession = nil;
             }
@@ -741,7 +774,7 @@
                     errorMsg = @"Failed to start recording using AVAudioRecorder";
                 }
                 audioFile.recorder = nil;
-                if (weakSelf.avSession) {
+                if (! keepAvAudioSessionAlwaysActive && weakSelf.avSession && ! [self isPlayingOrRecording]) {
                     [weakSelf.avSession setActive:NO error:nil];
                 }
                 [weakSelf onStatus:MEDIA_ERROR mediaId:mediaId param:
@@ -761,7 +794,7 @@
                     NSString* msg = @"Error creating audio session, microphone permission denied.";
                     NSLog(@"%@", msg);
                     audioFile.recorder = nil;
-                    if (weakSelf.avSession) {
+                    if (! keepAvAudioSessionAlwaysActive && weakSelf.avSession && ! [self isPlayingOrRecording]) {
                         [weakSelf.avSession setActive:NO error:nil];
                     }
                     [weakSelf onStatus:MEDIA_ERROR mediaId:mediaId param:
@@ -809,7 +842,7 @@
         [self onStatus:MEDIA_ERROR mediaId:mediaId param:
           [self createMediaErrorWithCode:MEDIA_ERR_DECODE message:nil]];
     }
-    if (self.avSession) {
+    if (! keepAvAudioSessionAlwaysActive && self.avSession && ! [self isPlayingOrRecording]) {
         [self.avSession setActive:NO error:nil];
     }
 }
@@ -831,18 +864,18 @@
         [self onStatus:MEDIA_ERROR mediaId:mediaId param:
             [self createMediaErrorWithCode:MEDIA_ERR_DECODE message:nil]];
     }
-    if (self.avSession) {
-        [self.avSession setActive:NO error:nil];
-    }
+     if (! keepAvAudioSessionAlwaysActive && self.avSession && ! [self isPlayingOrRecording]) {
+         [self.avSession setActive:NO error:nil];
+     }
 }
 
 -(void)itemDidFinishPlaying:(NSNotification *) notification {
     // Will be called when AVPlayer finishes playing playerItem
     NSString* mediaId = self.currMediaId;
 
-    if (self.avSession) {
-        [self.avSession setActive:NO error:nil];
-    }
+     if (! keepAvAudioSessionAlwaysActive && self.avSession && ! [self isPlayingOrRecording]) {
+         [self.avSession setActive:NO error:nil];
+     }
     [self onStatus:MEDIA_STATE mediaId:mediaId param:@(MEDIA_STOPPED)];
 }
 
@@ -853,12 +886,30 @@
 
 - (void)onMemoryWarning
 {
-    [[self soundCache] removeAllObjects];
-    [self setSoundCache:nil];
+    /* https://issues.apache.org/jira/browse/CB-11513 */
+    NSMutableArray* keysToRemove = [[NSMutableArray alloc] init];
+    
+    for(id key in [self soundCache]) {
+        CDVAudioFile* audioFile = [[self soundCache] objectForKey:key];
+        if (audioFile != nil) {
+            if (audioFile.player != nil && ![audioFile.player isPlaying]) {
+                [keysToRemove addObject:key];
+            }
+            if (audioFile.recorder != nil && ![audioFile.recorder isRecording]) {
+                [keysToRemove addObject:key];
+            }
+        }
+    }
+    
+    [[self soundCache] removeObjectsForKeys:keysToRemove];
+    
+    // [[self soundCache] removeAllObjects];
+    // [self setSoundCache:nil];
     [self setAvSession:nil];
 
     [super onMemoryWarning];
 }
+
 
 - (void)dealloc
 {
@@ -953,7 +1004,7 @@
         status[@"msgType"] = @(what);
         //in the error case contains a dict with "code" and "message"
         //otherwise a NSNumber
-        status[@"value"] = param; 
+        status[@"value"] = param;
         status[@"id"] = mediaId;
         NSMutableDictionary* dict=[NSMutableDictionary dictionary];
         dict[@"action"] = @"status";
@@ -967,10 +1018,24 @@
             param=[[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
         }
         NSString* jsString = [NSString stringWithFormat:@"%@(\"%@\",%d,%@);",
-              @"cordova.require('cordova-plugin-media.Media').onStatus", 
+              @"cordova.require('cordova-plugin-media.Media').onStatus",
               mediaId, (int)what, param];
         [self.commandDelegate evalJs:jsString];
     }
+}
+
+-(BOOL) isPlayingOrRecording
+{
+    for(NSString* mediaId in soundCache) {
+        CDVAudioFile* audioFile = [soundCache objectForKey:mediaId];
+        if (audioFile.player && [audioFile.player isPlaying]) {
+            return true;
+        }
+        if (audioFile.recorder && [audioFile.recorder isRecording]) {
+            return true;
+        }
+    }
+    return false;
 }
 
 @end
